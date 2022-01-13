@@ -28,6 +28,8 @@ contract Controller is Initializable, RegistryStorage {
     mapping(uint256 => uint256) private nextPeriodSwitchByDuration;
     mapping(address => uint256) private nextPerformanceFeeFactor; // represented as x/(10**18)
 
+    mapping(uint256 => mapping(uint256 => bool)) private periodSwitchedByDurationDisabled;
+
     EnumerableSetUpgradeable.UintSet private durations;
     mapping(uint256 => EnumerableSetUpgradeable.AddressSet) private futureVaultsByDuration;
     mapping(uint256 => uint256) private periodIndexByDurations;
@@ -48,9 +50,12 @@ contract Controller is Initializable, RegistryStorage {
     event DepositPauseChanged(IFutureVault _futureVault, bool _depositPaused);
     event WithdrawalPauseChanged(IFutureVault _futureVault, bool _withdrawalPaused);
     event FutureSetToBeTerminated(IFutureVault _futureVault);
+    event PeriodSwitchedByDurationDisabled(uint256 _periodDuration, uint256 _periodIndex);
+    event DelegationPauseChanged(bool _delegationPaused);
 
     /* PlatformController Settings */
     uint256 public STARTING_DELAY;
+    bool public DELEGATION_ENABLED;
 
     /* Modifiers */
 
@@ -61,6 +66,11 @@ contract Controller is Initializable, RegistryStorage {
 
     modifier durationIsPresent(uint256 _duration) {
         require(durations.contains(_duration), "Controller: Period Duration not Found");
+        _;
+    }
+
+    modifier delegationIsEnabled() {
+        require(DELEGATION_ENABLED, "Controller: Delegation not enabled");
         _;
     }
 
@@ -75,6 +85,7 @@ contract Controller is Initializable, RegistryStorage {
         _setupRole(DEFAULT_ADMIN_ROLE, _admin);
         _setupRole(ADMIN_ROLE, _admin);
         registry = _registry;
+        DELEGATION_ENABLED = true;
     }
 
     /* User Methods */
@@ -109,7 +120,7 @@ contract Controller is Initializable, RegistryStorage {
         IFutureVault _futureVault,
         address _receiver,
         uint256 _amount
-    ) external futureVaultIsValid(_futureVault) {
+    ) external delegationIsEnabled futureVaultIsValid(_futureVault) {
         _futureVault.createFYTDelegationTo(msg.sender, _receiver, _amount);
     }
 
@@ -213,22 +224,32 @@ contract Controller is Initializable, RegistryStorage {
         onlyStartFuture
         durationIsPresent(_periodDuration)
     {
+        uint256 perodIndexByDuration = periodIndexByDurations[_periodDuration];
+        require(
+            !periodSwitchedByDurationDisabled[_periodDuration][perodIndexByDuration],
+            "Controller: period cannot be switched with duration"
+        );
         uint256 numberOfVaults = futureVaultsByDuration[_periodDuration].length();
         for (uint256 i = 0; i < numberOfVaults; i++) {
             address futureVault = futureVaultsByDuration[_periodDuration].at(i);
             _startFuture(IFutureVault(futureVault));
         }
         nextPeriodSwitchByDuration[_periodDuration] = nextPeriodSwitchByDuration[_periodDuration].add(_periodDuration);
-        periodIndexByDurations[_periodDuration]++;
+        periodIndexByDurations[_periodDuration] = perodIndexByDuration.add(1);
         emit NextPeriodSwitchSet(_periodDuration, nextPeriodSwitchByDuration[_periodDuration]);
     }
 
     /**
      * @notice Start a specific future
      * @param _futureVault the interface of the futureVault to start
+     * @dev should not be called if planning to use startFuturesByPeriodDuration in the same period
      */
     function startFuture(IFutureVault _futureVault) external onlyStartFuture futureVaultIsValid(_futureVault) {
+        uint256 periodDuration = _futureVault.PERIOD_DURATION();
+        uint256 periodIndex = periodIndexByDurations[periodDuration];
+        periodSwitchedByDurationDisabled[periodDuration][periodIndex] = true;
         _startFuture(_futureVault);
+        emit PeriodSwitchedByDurationDisabled(periodDuration, periodIndex);
     }
 
     function _startFuture(IFutureVault _futureVault) internal {
@@ -421,6 +442,15 @@ contract Controller is Initializable, RegistryStorage {
         bool depositPaused = !depositsPausedByFutureVault[address(_futureVault)];
         depositsPausedByFutureVault[address(_futureVault)] = depositPaused;
         emit DepositPauseChanged(_futureVault, depositPaused);
+    }
+
+    /**
+     * @notice Toggle delegation
+     * @dev should only be called in extraordinary situations by the admin of the contract
+     */
+    function toggleDelegationPause() external onlyAdmin {
+        DELEGATION_ENABLED = !DELEGATION_ENABLED;
+        emit DelegationPauseChanged(DELEGATION_ENABLED);
     }
 
     /**

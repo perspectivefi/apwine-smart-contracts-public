@@ -296,6 +296,11 @@ abstract contract FutureVault is Initializable, RegistryStorage, ReentrancyGuard
 
         uint256 premiumToBeUnlocked = _prepareUserEarlyPremiumUnlock(_user, _amount);
 
+        require(
+            pt.balanceOf(_user) >= _amount.add(getTotalDelegated(_user)),
+            "FutureVault: transfer amount exceeds transferrable balance"
+        );
+
         uint256 treasuryFee = (yieldToBeUnlocked.mul(performanceFeeFactor) / UNIT).sub(premiumToBeUnlocked);
         uint256 yieldToBeRedeemed = yieldToBeUnlocked - treasuryFee;
         ibt.safeTransfer(_user, fundsToBeUnlocked.add(yieldToBeRedeemed).add(premiumToBeUnlocked));
@@ -324,6 +329,7 @@ abstract contract FutureVault is Initializable, RegistryStorage, ReentrancyGuard
                 premiumToBeRedeemed[_user] = unlockablePremium - premiumForAmount;
                 FYTsOfUserPremium[_user] = userFYTsInPremium - _ptShares;
             }
+            premiumsTotal[getCurrentPeriodIndex()] = premiumsTotal[getCurrentPeriodIndex()].sub(premiumToBeUnlocked);
         }
     }
 
