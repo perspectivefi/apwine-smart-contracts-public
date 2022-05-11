@@ -17,7 +17,10 @@ contract AMM is IAMM, RoleCheckable {
     using SafeERC20Upgradeable for IERC20;
 
     // ERC-165 identifier for the main token standard.
-    bytes4 public constant ERC1155_ERC165 = 0xd9b67a26;
+    bytes4 public constant ERC1155_ERC165 = git;
+
+    // keccak256("ROUTER_ROLE")
+    bytes32 internal constant ROUTER_ROLE = 0x7a05a596cb0ce7fdea8a1e1ec73be300bdb35097c944ce1897202f7a13122eb2;
 
     uint64 public override ammId;
 
@@ -53,20 +56,6 @@ contract AMM is IAMM, RoleCheckable {
 
     mapping(uint256 => Pair) private pairs;
     mapping(address => uint256) private tokenToPairID;
-
-    modifier nonReentrant() {
-        // On the first call to nonReentrant, _notEntered will be true
-        require(_status != _ENTERED, "ReentrancyGuard: reentrant call");
-
-        // Any calls to nonReentrant after this point will fail
-        _status = _ENTERED;
-
-        _;
-
-        // By storing the original value once again, a refund is triggered (see
-        // https://eips.ethereum.org/EIPS/eip-2200)
-        _status = _NOT_ENTERED;
-    }
 
     event AMMStateChanged(AMMGlobalState _newState);
     event PairCreated(uint256 indexed _pairID, address _token);
@@ -105,7 +94,8 @@ contract AMM is IAMM, RoleCheckable {
         address _futureVault,
         ILPToken _poolTokens,
         address _admin,
-        address _feesRecipient
+        address _feesRecipient,
+        address _router
     ) public virtual initializer {
         require(_poolTokens.supportsInterface(ERC1155_ERC165), "AMM: Interface not supported");
         require(_underlyingOfIBTAddress != address(0), "AMM: Invalid underlying address");
@@ -127,10 +117,11 @@ contract AMM is IAMM, RoleCheckable {
 
         // Instantiate weights of first pool
         tokenToPairID[_ptAddress] = 0;
-        _createPair(uint256(0), _underlyingOfIBTAddress);
+        _createPair(AMMMaths.ZERO_256, _underlyingOfIBTAddress);
         _status = _NOT_ENTERED;
         // Role initialization
         _setupRole(ADMIN_ROLE, _admin);
+        _setupRole(ROUTER_ROLE, _router);
 
         state = AMMGlobalState.Created; // waiting to be finalized
     }
@@ -139,7 +130,7 @@ contract AMM is IAMM, RoleCheckable {
         pairs[_pairID] = Pair({
             tokenAddress: _tokenAddress,
             weights: [BASE_WEIGHT, BASE_WEIGHT],
-            balances: [uint256(0), uint256(0)],
+            balances: [AMMMaths.ZERO_256, AMMMaths.ZERO_256],
             liquidityIsInitialized: false
         });
         tokenToPairID[_tokenAddress] = _pairID;
@@ -191,7 +182,8 @@ contract AMM is IAMM, RoleCheckable {
         uint256 ptBalance = pairs[0].balances[0];
         if (ptBalance != 0) {
             IController(futureVault.getControllerAddress()).withdraw(address(futureVault), ptBalance);
-        }        _saveExpiredIBTs(0, ibt.balanceOf(address(this)).sub(oldIBTBalance), currentPeriodIndex);
+        }
+        _saveExpiredIBTs(0, ibt.balanceOf(address(this)).sub(oldIBTBalance), currentPeriodIndex);
         _resetPair(0);
     }
 
@@ -228,7 +220,6 @@ contract AMM is IAMM, RoleCheckable {
      */
     function _updateWeightsFromYieldAtBlock() internal {
         (uint256 newUnderlyingWeight, uint256 yieldRecorded) = _getUpdatedUnderlyingWeightAndYield();
-
         if (newUnderlyingWeight != pairs[0].weights[1]) {
             lastYieldRecorded = yieldRecorded;
             lastBlockYieldRecorded = block.number;
@@ -256,12 +247,9 @@ contract AMM is IAMM, RoleCheckable {
                 uint256 newUnderlyingWeight =
                     balances[1].mul(AMMMaths.UNIT).div(balances[1].add(balances[0].mul(newSpotPrice).div(AMMMaths.UNIT)));
                 return (newUnderlyingWeight, yieldRecorded);
-            } else {
-                return (pairs[0].weights[1], yieldRecorded);
             }
-        } else {
-            return (pairs[0].weights[1], yieldRecorded);
         }
+        return (pairs[0].weights[1], yieldRecorded);
     }
 
     /* Renewal functions */
@@ -269,8 +257,10 @@ contract AMM is IAMM, RoleCheckable {
     /**
      * @notice Withdraw expired LP tokens
      */
-    function withdrawExpiredToken(address _user, uint256 _lpTokenId) public override nonReentrant {
+    function withdrawExpiredToken(address _user, uint256 _lpTokenId) external override {
+        nonReentrant();
         _withdrawExpiredToken(_user, _lpTokenId);
+        _status = _NOT_ENTERED;
     }
 
     function _withdrawExpiredToken(address _user, uint256 _lpTokenId) internal {
@@ -279,7 +269,6 @@ contract AMM is IAMM, RoleCheckable {
         uint256 userTotal = poolTokens.balanceOf(_user, _lpTokenId);
         uint256 tokenSupply = totalLPSupply[pairId][lastPeriodId];
 
-        totalLPSupply[pairId][lastPeriodId] = totalLPSupply[pairId][lastPeriodId].sub(userTotal);
         poolTokens.burnFrom(_user, _lpTokenId, userTotal);
 
         if (pairId == 0) {
@@ -336,8 +325,6 @@ contract AMM is IAMM, RoleCheckable {
         );
     }
 
-    function _getRedeemableExpiredTokens(address _user, uint256 _lpTokenId) internal view returns (uint256) {}
-
     /* Swapping functions */
     function swapExactAmountIn(
         uint256 _pairID,
@@ -346,7 +333,9 @@ contract AMM is IAMM, RoleCheckable {
         uint256 _tokenOut,
         uint256 _minAmountOut,
         address _to
-    ) external override nonReentrant returns (uint256 tokenAmountOut, uint256 spotPriceAfter) {
+    ) external override returns (uint256 tokenAmountOut, uint256 spotPriceAfter) {
+        nonReentrant();
+        samePeriodIndex();
         ammIsActive();
         pairLiquidityIsInitialized(_pairID);
         tokenIdsAreValid(_tokenIn, _tokenOut);
@@ -363,6 +352,7 @@ contract AMM is IAMM, RoleCheckable {
         _pullToken(msg.sender, _pairID, _tokenIn, _tokenAmountIn);
         _pushToken(_to, _pairID, _tokenOut, tokenAmountOut);
         emit Swapped(msg.sender, _pairID, _tokenIn, _tokenOut, _tokenAmountIn, tokenAmountOut, _to);
+        _status = _NOT_ENTERED;
         return (tokenAmountOut, spotPriceAfter);
     }
 
@@ -408,7 +398,9 @@ contract AMM is IAMM, RoleCheckable {
         uint256 _tokenOut,
         uint256 _tokenAmountOut,
         address _to
-    ) external override nonReentrant returns (uint256 tokenAmountIn, uint256 spotPriceAfter) {
+    ) external override returns (uint256 tokenAmountIn, uint256 spotPriceAfter) {
+        nonReentrant();
+        samePeriodIndex();
         ammIsActive();
         pairLiquidityIsInitialized(_pairID);
         tokenIdsAreValid(_tokenIn, _tokenOut);
@@ -419,7 +411,7 @@ contract AMM is IAMM, RoleCheckable {
         _pullToken(msg.sender, _pairID, _tokenIn, tokenAmountIn);
         _pushToken(_to, _pairID, _tokenOut, _tokenAmountOut);
         emit Swapped(msg.sender, _pairID, _tokenIn, _tokenOut, tokenAmountIn, _tokenAmountOut, _to);
-
+        _status = _NOT_ENTERED;
         return (tokenAmountIn, spotPriceAfter);
     }
 
@@ -465,7 +457,9 @@ contract AMM is IAMM, RoleCheckable {
         uint256 _tokenIn,
         uint256 _tokenAmountIn,
         uint256 _minPoolAmountOut
-    ) external override nonReentrant returns (uint256 poolAmountOut) {
+    ) external override returns (uint256 poolAmountOut) {
+        nonReentrant();
+        samePeriodIndex();
         ammIsActive();
         pairLiquidityIsInitialized(_pairID);
 
@@ -493,6 +487,7 @@ contract AMM is IAMM, RoleCheckable {
 
         _pullToken(msg.sender, _pairID, _tokenIn, _tokenAmountIn);
         _joinPool(msg.sender, poolAmountOut, _pairID);
+        _status = _NOT_ENTERED;
         return poolAmountOut;
     }
 
@@ -501,7 +496,9 @@ contract AMM is IAMM, RoleCheckable {
         uint256 _tokenIn,
         uint256 _poolAmountOut,
         uint256 _maxAmountIn
-    ) external override nonReentrant returns (uint256 tokenAmountIn) {
+    ) external override returns (uint256 tokenAmountIn) {
+        nonReentrant();
+        samePeriodIndex();
         ammIsActive();
         pairLiquidityIsInitialized(_pairID);
         require(_tokenIn < 2, "AMM: Invalid Token Id");
@@ -527,6 +524,7 @@ contract AMM is IAMM, RoleCheckable {
 
         _pullToken(msg.sender, _pairID, _tokenIn, tokenAmountIn);
         _joinPool(msg.sender, _poolAmountOut, _pairID);
+        _status = _NOT_ENTERED;
         return tokenAmountIn;
     }
 
@@ -535,7 +533,9 @@ contract AMM is IAMM, RoleCheckable {
         uint256 _tokenOut,
         uint256 _poolAmountIn,
         uint256 _minAmountOut
-    ) external override nonReentrant returns (uint256 tokenAmountOut) {
+    ) external override returns (uint256 tokenAmountOut) {
+        nonReentrant();
+        samePeriodIndex();
         ammIsActive();
         pairLiquidityIsInitialized(_pairID);
         require(_tokenOut < 2, "AMM: Invalid Token Id");
@@ -561,6 +561,7 @@ contract AMM is IAMM, RoleCheckable {
 
         _exitPool(msg.sender, _poolAmountIn, _pairID);
         _pushToken(msg.sender, _pairID, _tokenOut, tokenAmountOut);
+        _status = _NOT_ENTERED;
         return tokenAmountOut;
     }
 
@@ -569,7 +570,9 @@ contract AMM is IAMM, RoleCheckable {
         uint256 _tokenOut,
         uint256 _tokenAmountOut,
         uint256 _maxPoolAmountIn
-    ) external override nonReentrant returns (uint256 poolAmountIn) {
+    ) external override returns (uint256 poolAmountIn) {
+        nonReentrant();
+        samePeriodIndex();
         ammIsActive();
         pairLiquidityIsInitialized(_pairID);
         require(_tokenOut < 2, "AMM: Invalid Token Id");
@@ -599,6 +602,7 @@ contract AMM is IAMM, RoleCheckable {
 
         _exitPool(msg.sender, poolAmountIn, _pairID);
         _pushToken(msg.sender, _pairID, _tokenOut, _tokenAmountOut);
+        _status = _NOT_ENTERED;
         return poolAmountIn;
     }
 
@@ -607,7 +611,8 @@ contract AMM is IAMM, RoleCheckable {
     /**
      * @notice Create liquidity on the pair setting an initial price
      */
-    function createLiquidity(uint256 _pairID, uint256[2] memory _tokenAmounts) external override nonReentrant {
+    function createLiquidity(uint256 _pairID, uint256[2] memory _tokenAmounts) external override {
+        nonReentrant();
         ammIsActive();
         require(!pairs[_pairID].liquidityIsInitialized, "AMM: Liquidity already present");
         require(_tokenAmounts[0] != 0 && _tokenAmounts[1] != 0, "AMM: Tokens Liquidity not exists");
@@ -616,6 +621,7 @@ contract AMM is IAMM, RoleCheckable {
         _joinPool(msg.sender, AMMMaths.UNIT, _pairID);
         pairs[_pairID].liquidityIsInitialized = true;
         emit LiquidityCreated(msg.sender, _pairID);
+        _status = _NOT_ENTERED;
     }
 
     function _pullToken(
@@ -646,7 +652,9 @@ contract AMM is IAMM, RoleCheckable {
         uint256 _pairID,
         uint256 _poolAmountOut,
         uint256[2] memory _maxAmountsIn
-    ) external override nonReentrant {
+    ) external override {
+        nonReentrant();
+        samePeriodIndex();
         ammIsActive();
         pairLiquidityIsInitialized(_pairID);
         require(_poolAmountOut != 0, "AMM: Amount cannot be 0");
@@ -661,17 +669,22 @@ contract AMM is IAMM, RoleCheckable {
             _pullToken(msg.sender, _pairID, i, amountIn);
         }
         _joinPool(msg.sender, _poolAmountOut, _pairID);
+        _status = _NOT_ENTERED;
     }
 
     function removeLiquidity(
         uint256 _pairID,
         uint256 _poolAmountIn,
         uint256[2] memory _minAmountsOut
-    ) external override nonReentrant {
+    ) external override {
+        nonReentrant();
         ammIsActive();
+        samePeriodIndex();
         pairLiquidityIsInitialized(_pairID);
         require(_poolAmountIn != 0, "AMM: Amount cannot be 0");
-        _updateWeightsFromYieldAtBlock();
+        if (futureVault.getCurrentPeriodIndex() == currentPeriodIndex) {
+            _updateWeightsFromYieldAtBlock();
+        }
 
         uint256 poolTotal = totalLPSupply[_pairID][currentPeriodIndex];
 
@@ -682,6 +695,7 @@ contract AMM is IAMM, RoleCheckable {
             _pushToken(msg.sender, _pairID, i, amountOut.mul(AMMMaths.UNIT.sub(AMMMaths.EXIT_FEE)).div(AMMMaths.UNIT));
         }
         _exitPool(msg.sender, _poolAmountIn, _pairID);
+        _status = _NOT_ENTERED;
     }
 
     function _joinPool(
@@ -861,6 +875,24 @@ contract AMM is IAMM, RoleCheckable {
      */
     function pairLiquidityIsInitialized(uint256 _pairID) private view {
         require(pairs[_pairID].liquidityIsInitialized, "AMM: Pair not active");
+    }
+
+    /**
+     * @notice Check the periodIndex of Protocol and AMM
+     */
+    function samePeriodIndex() private view {
+        require(futureVault.getCurrentPeriodIndex() == currentPeriodIndex, "AMM: Period index not same");
+    }
+
+    /**
+     * @notice nonReentrant function used to remove reentrency
+     */
+    function nonReentrant() private {
+        // On the first call to nonReentrant, _notEntered will be true
+        require(_status != _ENTERED, "ReentrancyGuard: reentrant call");
+
+        // Any calls to nonReentrant after this point will fail
+        _status = _ENTERED;
     }
 
     /**

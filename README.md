@@ -1,6 +1,6 @@
 # APWine smart contracts
 
-This repository contains the public smart contracts of the APWine protocol and its governance. The documentation is available [here](https://docs.apwine.fi/).
+This repository contains the public smart contracts of the APWine protocol and its governance. The documentation is available [here](https://docs.apwine.fi/). By default addresses are the same accross different networks.
 
 ## Governance
 
@@ -20,13 +20,11 @@ This repository contains the public smart contracts of the APWine protocol and i
 ## Exchange
 
 - AMM Registry: [0x6646A35e74e35585B0B02e5190445A324E5D4D01](https://etherscan.io/address/0x6646A35e74e35585B0B02e5190445A324E5D4D01)
-- AMM Router: [0xb6e370D83A180EA3667dB41a2aCFAf605fa03788](https://etherscan.io/address/0xb6e370D83A180EA3667dB41a2aCFAf605fa03788)
+- AMM Router: [0xf5ba2E5DdED276fc0f7a7637A61157a4be79C626](https://etherscan.io/address/0xf5ba2E5DdED276fc0f7a7637A61157a4be79C626) (mainnet) | [0x790a0cA839DC5E4690C8c58cb57fD2beCA419AFc](https://etherscan.io/address/0x790a0cA839DC5E4690C8c58cb57fD2beCA419AFc) (polygon)
 - LP Token: [0xab1cAB9C059b627dE5add93834b70e5048923f81](https://etherscan.io/address/0xab1cAB9C059b627dE5add93834b70e5048923f81)
 
-| Pool     | FutureVault                                                                                                           | FutureWallet                                                                                                          | AMM                                                                                                                   |
-| -------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| StakeDAO | [0x10F29cF8e6BA81363a330C50F74900D03Cd6324D](https://etherscan.io/address/0x10F29cF8e6BA81363a330C50F74900D03Cd6324D) | [0x5B7dB209194414450Be045EA34F25f45F1847BBF](https://etherscan.io/address/0x5B7dB209194414450Be045EA34F25f45F1847BBF) | [0x8A362AA1c81ED0Ee2Ae677A8b59e0f563DD290Ba](https://etherscan.io/address/0x8A362AA1c81ED0Ee2Ae677A8b59e0f563DD290Ba) |
-| Paladin  | [0xBd0BA083acA48BF6BE034890006E92B874783365](https://etherscan.io/address/0xBd0BA083acA48BF6BE034890006E92B874783365) | [0x33b22e2cC0aF29BEFdCfdd0ABfb9b1dAE23b4141](https://etherscan.io/address/0x33b22e2cC0aF29BEFdCfdd0ABfb9b1dAE23b4141) | [0xc61C0F4961F2093A083f47a4b783ad260DeAF7eA](https://etherscan.io/address/0xc61C0F4961F2093A083f47a4b783ad260DeAF7eA) |
-| Lido     | [0x35bBdC3FBdC26f7DfEe5670aF50B93c7EaBCe2c0](https://etherscan.io/address/0x35bBdC3FBdC26f7DfEe5670aF50B93c7EaBCe2c0) | [0xb9aF29F981B4A69De421f5d8dA46c2C7c473c67c](https://etherscan.io/address/0xb9aF29F981B4A69De421f5d8dA46c2C7c473c67c) | [0x1604C5e9aB488D66E983644355511DCEF5c32EDF](https://etherscan.io/address/0x1604C5e9aB488D66E983644355511DCEF5c32EDF) |
-| ParaSwap | [0xb9Df660CAAA62d47df265A469c8b77F661EFc18d](https://etherscan.io/address/0xb9Df660CAAA62d47df265A469c8b77F661EFc18d) | [0x0AdB804fE292AF95C05e3c03E6ea372116b37D69](https://etherscan.io/address/0x0AdB804fE292AF95C05e3c03E6ea372116b37D69) | [0xA4085c106c7a9A7AD0574865bbd7CaC5E1098195](https://etherscan.io/address/0xA4085c106c7a9A7AD0574865bbd7CaC5E1098195) |
-| TrueFi   | [0x6fb566cB80A5038BBe0421A91D9F96F9Bb9D6D95](https://etherscan.io/address/0x6fb566cB80A5038BBe0421A91D9F96F9Bb9D6D95) | [0xCbD1De3b69f80A407c0423226716bFEa6aAAA7D7](https://etherscan.io/address/0xCbD1De3b69f80A407c0423226716bFEa6aAAA7D7) | [0x0CC36e3cc5eACA6d046b537703ae946874d57299](https://etherscan.io/address/0x0CC36e3cc5eACA6d046b537703ae946874d57299) |
+# Pools
+
+- To get the list of FutureVault: `getFutureVaultAt()` on `Registry` (you can obtain the count with `futureVaultCount()` on `Registry`)
+- To get the address of an AMM: `getFutureAMMPool(address _futureVaultAddress)` on `AMMRegistry`
+- To get address a FutureWallet: `getFutureWalletAddress()` on `FutureVault`

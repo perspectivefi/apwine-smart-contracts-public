@@ -80,7 +80,6 @@ abstract contract FutureVault is Initializable, RegistryStorage, ReentrancyGuard
     event LiquidityTransfersResumed();
     event DelegationCreated(address _delegator, address _receiver, uint256 _amount);
     event DelegationRemoved(address _delegator, address _receiver, uint256 _amount);
-
     /* Modifiers */
     modifier nextPeriodAvailable() {
         uint256 controllerDelay = controller.STARTING_DELAY();
@@ -114,7 +113,7 @@ abstract contract FutureVault is Initializable, RegistryStorage, ReentrancyGuard
      * @notice Intializer
      * @param _controller the address of the controller
      * @param _ibt the address of the corresponding IBT
-     * @param _periodDuration the length of the period (in days)
+     * @param _periodDuration the length of the period (in seconds)
      * @param _platformName the name of the platform and tools
      * @param _admin the address of the ACR admin
      */
@@ -129,7 +128,7 @@ abstract contract FutureVault is Initializable, RegistryStorage, ReentrancyGuard
         ibt = _ibt;
         IBT_UNIT = 10**ibt.decimals();
         IBT_UNITS_MULTIPLIED_VALUE = UNIT * IBT_UNIT;
-        PERIOD_DURATION = _periodDuration * (1 days);
+        PERIOD_DURATION = _periodDuration;
         PLATFORM_NAME = _platformName;
         _setupRole(DEFAULT_ADMIN_ROLE, _admin);
         _setupRole(ADMIN_ROLE, _admin);
@@ -170,9 +169,9 @@ abstract contract FutureVault is Initializable, RegistryStorage, ReentrancyGuard
             uint256 performanceFee = (yield.mul(performanceFeeFactor) / UNIT).sub(premiums);
             uint256 remainingYield = yield.sub(performanceFee);
             yieldOfPeriod[currentPeriodIndex] = convertIBTToUnderlying(
-                remainingYield.mul(UNIT).div(totalUnderlyingDeposited)
+                remainingYield.mul(IBT_UNIT).div(totalUnderlyingDeposited)
             );
-            uint256 collectedYield = remainingYield.mul(collectedFYTSByPeriod[currentPeriodIndex]).div(
+            uint256 collectedYield = remainingYield.mul(fyts[currentPeriodIndex].totalSupply()).div(
                 totalUnderlyingDeposited
             );
             reinvestedYield = remainingYield.sub(collectedYield);
@@ -204,6 +203,7 @@ abstract contract FutureVault is Initializable, RegistryStorage, ReentrancyGuard
      * @param _user user adress
      */
     function updateUserState(address _user) public {
+        require(_user != address(0) , "ERR: Address can't be zero");
         uint256 currentPeriodIndex = getCurrentPeriodIndex();
         uint256 lastPeriodClaimedOfUser = lastPeriodClaimed[_user];
         if (lastPeriodClaimedOfUser < currentPeriodIndex && lastPeriodClaimedOfUser != 0) {
@@ -218,10 +218,10 @@ abstract contract FutureVault is Initializable, RegistryStorage, ReentrancyGuard
             claimablePT = getClaimablePT(_user);
             delete premiumToBeRedeemed[_user];
             delete FYTsOfUserPremium[_user];
-            lastPeriodClaimed[_user] = currentPeriodIndex;
             claimableFYTByUser[_user] = pt.balanceOf(_user).add(totalDelegationsReceived[_user]).sub(
                 getTotalDelegated(_user)
             );
+            lastPeriodClaimed[_user] = currentPeriodIndex;
         }
     }
 
@@ -243,7 +243,7 @@ abstract contract FutureVault is Initializable, RegistryStorage, ReentrancyGuard
         uint256 currentPeriodIndex = getCurrentPeriodIndex();
 
         /* Update premium */
-        uint256 redeemable = getPremiumPerUnderlyingDeposited(convertIBTToUnderlying(_amount));
+        uint256 redeemable = getPremiumPerUnderlyingDeposited(underlyingDeposited);
         premiumToBeRedeemed[_user] = premiumToBeRedeemed[_user].add(redeemable);
         FYTsOfUserPremium[_user] = FYTsOfUserPremium[_user].add(ptToMint);
         premiumsTotal[currentPeriodIndex] = premiumsTotal[currentPeriodIndex].add(redeemable);
@@ -272,12 +272,13 @@ abstract contract FutureVault is Initializable, RegistryStorage, ReentrancyGuard
         if (_amount > FYTSMinted) {
             FYTsToBurn = FYTSMinted;
             uint256 ClaimableFYTsToBurn = _amount - FYTsToBurn;
-            claimableFYTByUser[_user] = claimableFYTByUser[_user].sub(ClaimableFYTsToBurn, "FutureVault: ERR_AMOUNT");
-            collectedFYTSByPeriod[currentPeriodIndex] = collectedFYTSByPeriod[currentPeriodIndex].add(ClaimableFYTsToBurn);
+            claimableFYTByUser[_user] = claimableFYTByUser[_user].sub(
+                ClaimableFYTsToBurn,
+                "FutureVault: ClaimableFYTsToBurn > claimableFYTByUser"
+            );
         } else {
             FYTsToBurn = _amount;
         }
-
         if (FYTsToBurn > 0) fyts[currentPeriodIndex].burnFrom(_user, FYTsToBurn);
 
         emit FundsWithdrawn(_user, _amount);
@@ -441,9 +442,8 @@ abstract contract FutureVault is Initializable, RegistryStorage, ReentrancyGuard
 
     function _claimFYT(address _user, uint256 _amount) internal virtual {
         uint256 currentPeriodIndex = getCurrentPeriodIndex();
-        claimableFYTByUser[_user] = claimableFYTByUser[_user].sub(_amount, "ERR_CLAIMED_FYT_AMOUNT");
+        claimableFYTByUser[_user] = claimableFYTByUser[_user].sub(_amount, "FutureVault: ERR_CLAIMED_FYT_AMOUNT");
         fyts[currentPeriodIndex].mint(_user, _amount);
-        collectedFYTSByPeriod[currentPeriodIndex] = collectedFYTSByPeriod[currentPeriodIndex].add(_amount);
     }
 
     /* Termination of the pool */
@@ -475,13 +475,13 @@ abstract contract FutureVault is Initializable, RegistryStorage, ReentrancyGuard
     }
 
     /* Getters */
-
     /**
      * @notice Getter for the amount of pt that the user can claim
      * @param _user user to check the check the claimable pt of
      * @return the amount of pt claimable by the user
      */
     function getClaimablePT(address _user) public view virtual returns (uint256) {
+        require(_user != address(0) , "ERR: Address can't be zero");
         uint256 currentPeriodIndex = getCurrentPeriodIndex();
 
         if (lastPeriodClaimed[_user] < currentPeriodIndex) {
